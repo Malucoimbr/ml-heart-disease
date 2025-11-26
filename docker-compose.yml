@@ -1,0 +1,85 @@
+version: '3.8'
+services:
+  # PostgreSQL (DB estruturado e backend do MLFlow)
+  pg_db:
+    image: postgres:latest
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+
+  # MLFlow (Rastreamento)
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:latest
+    ports:
+      - "5000:5000"
+    environment:
+      # Configuração para usar o S3
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+    command: >
+      mlflow server
+      --backend-store-uri postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pg_db/${POSTGRES_DB}
+      --default-artifact-root s3://${S3_BUCKET_NAME}/mlflow_artifacts/
+      --host 0.0.0.0
+    depends_on:
+      - pg_db
+
+  # JupyterLab (Modelagem)
+  jupyterlab:
+    build: ./jupyterlab # Procura o Dockerfile na pasta jupyterlab
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./notebooks:/home/jovyan/work # Mapeia sua pasta local de notebooks para o container
+    environment:
+      # Variáveis injetadas para o código Python
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION: ${AWS_REGION}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME}
+      DB_HOST: pg_db
+    depends_on:
+      - mlflow
+      - pg_db
+
+  # FastAPI (Ingestão)
+  fastapi:
+    build: ./fastapi # Procura o Dockerfile na pasta fastapi
+    ports:
+      - "8000:8000"
+    environment:
+      # Variáveis injetadas para o código Python
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION: ${AWS_REGION}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME}
+      DB_HOST: pg_db
+    depends_on:
+      - pg_db
+
+  # ThingsBoard (Visualização)
+  thingsboard:
+    image: thingsboard/tb-postgres:${THINGSBOARD_VERSION}
+    ports:
+      - "8080:8080"
+    environment:
+      INSTALL_TB: 'true'
+    depends_on:
+      - pg_db
+
+  # # Trendz (Visualização - Porta ajustada para 8889 para não conflitar com o Jupyter)
+  # trendz:
+  #    image: trendz/trendz-analytics:${TRENDZ_VERSION}
+  #    ports:
+  #      - "8889:8888" 
+  #    depends_on:
+  #      - thingsboard
+      
+volumes:
+  pg_data:
