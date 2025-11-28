@@ -3,9 +3,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Instala dependências da API (FastAPI, uvicorn, boto3 para S3)
-# Inclui kagglehub para baixar o dataset
-RUN pip install fastapi uvicorn "python-multipart" boto3 kagglehub
+# INSTALAR DEPENDÊNCIAS DE DADOS E CONEXÃO SQL:
+# Adicionamos: pandas, sqlalchemy (para create_engine) e psycopg2-binary (driver do Postgres)
+RUN pip install fastapi uvicorn "python-multipart" boto3 kagglehub pandas sqlalchemy psycopg2-binary
 
 # Copia o código da API
 COPY ./main.py /app/main.py

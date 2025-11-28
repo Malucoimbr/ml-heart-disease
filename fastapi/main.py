@@ -5,7 +5,11 @@ import os
 import time
 import kagglehub
 import glob
-import shutil # Para limpar o download local após o upload
+import shutil
+import pandas as pd
+import io
+from sqlalchemy import create_engine, text
+
 
 app = FastAPI(title="Camada de Ingestão de Dados (FastAPI)")
 
@@ -110,3 +114,60 @@ async def ingest_kaggle_data():
         # 5. Limpar arquivos temporários baixados pelo kagglehub
         if path_to_dir and os.path.exists(path_to_dir):
             shutil.rmtree(path_to_dir, ignore_errors=True)
+
+
+  # NOVO ENDPOINT: PEGA DO S3 E MANDA PARA O POSTGRESQL
+
+@app.post("/load_raw_to_db/")
+async def load_raw_to_db():
+    """Lê o arquivo CSV mais recente do S3 (dados brutos) e carrega-o no PostgreSQL."""
+    
+    s3_client = get_s3_client()
+    bucket_name = os.environ.get("S3_BUCKET_NAME")
+    s3_prefix = "raw_data/"
+    RAW_TABLE_NAME = "heart_disease_raw"
+    
+    # --- 1. CONFIGURAR CONEXÃO COM POSTGRESQL (usando as variáveis do .env) ---
+    POSTGRES_USER = os.environ.get("POSTGRES_USER")
+    POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD")
+    POSTGRES_DB = os.environ.get("POSTGRES_DB")
+    DB_HOST = os.environ.get("DB_HOST") # 'pg_db'
+    DATABASE_URL = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DB_HOST}:5432/{POSTGRES_DB}"
+    
+    try:
+        # 2. ENCONTRAR O ARQUIVO MAIS RECENTE NO S3
+        response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=s3_prefix)
+        
+        if 'Contents' not in response:
+            return JSONResponse(status_code=404, content={"status": "erro", "message": "Nenhum arquivo encontrado no S3."})
+
+        latest_file = max(response['Contents'], key=lambda x: x['LastModified'])
+        s3_key_full = latest_file['Key']
+        
+        # 3. BAIXAR O ARQUIVO E LER DIRETAMENTE PARA O PANDAS
+        obj = s3_client.get_object(Bucket=bucket_name, Key=s3_key_full)
+        # Nota: Usando 'df_raw' como variável local para clareza
+        df_raw = pd.read_csv(io.BytesIO(obj['Body'].read())) 
+        
+        # 4. CONECTAR E SALVAR NO POSTGRESQL
+        engine = create_engine(DATABASE_URL)
+        df_raw.to_sql(
+            RAW_TABLE_NAME, 
+            engine, 
+            if_exists='replace', # Recria a tabela toda vez
+            index=False 
+        )
+        
+        return JSONResponse(content={
+            "status": "sucesso", 
+            "message": f"Dados brutos do S3 carregados para PostgreSQL na tabela: {RAW_TABLE_NAME}",
+            "rows_loaded": len(df_raw)
+        })
+        
+    except Exception as e:
+        return JSONResponse(status_code=500, content={
+            "status": "erro", 
+            "message": f"Falha na estruturação (S3 -> DB): {str(e)}"
+        })
+
+
